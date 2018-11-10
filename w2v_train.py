@@ -4,9 +4,10 @@ import os
 import numpy as np
 
 
-def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32):
+def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32, attr_embedding_length=8):
     """
 
+    :param attr_embedding_length:
     :param cat_dims: list of int:[x1, x2, x3]
     :param attributes_dims: list of dims(int):[y1, y2, y3]
     :param embedding_length:
@@ -22,7 +23,7 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32
     cat_embeddings = [layers.Embedding(input_length=1, input_dim=cat_dim, output_dim=embedding_length) for cat_dim in
                       cat_dims]
 
-    attributes_embeddings = [layers.Embedding(input_length=1, input_dim=attr_dim, output_dim=embedding_length) for
+    attributes_embeddings = [layers.Embedding(input_length=1, input_dim=attr_dim, output_dim=attr_embedding_length) for
                              attr_dim in
                              attributes_dims]
 
@@ -71,13 +72,14 @@ def batch_generator(data: [pd.DataFrame, pd.DataFrame], batch_size=64, negative_
     b_data = data[0][["user_id", "seller_id", "cat_id", "brand_id"]].values
     info_data = data[1].sort_values(by="user_id").values
     while True:
-        if (index + windows_size + 1) > len(data[0]):  # start from head when reaching the end
-            index = windows_size
-        batch = []
-        label = np.zeros(shape=(batch_size), dtype=np.int8)
+        batch = np.empty(shape=(0, 8, 1), dtype=np.int32)
+        label = np.zeros(shape=batch_size, dtype=np.int8)
         batch_num = 0
         true_num = 0
         while batch_num < batch_size:
+            if (index + windows_size + 1) > len(data[0]):  # start from head when reaching the end
+                index = windows_size
+                
             if true_num < true_needed:
                 batch_next = np.concatenate((b_data[index - windows_size:index],
                                              b_data[index + 1:index + 1 + windows_size]))
@@ -85,14 +87,13 @@ def batch_generator(data: [pd.DataFrame, pd.DataFrame], batch_size=64, negative_
                 label_part = (batch_next[:, 0] == centre_line[0]).astype(int)
                 label[batch_num:batch_num + windows_size * 2] = label[
                                                                 batch_num:batch_num + windows_size * 2] + label_part
-                full_length_batch_first = np.repeat(centre_line[1:].reshape((1, 1, -1)), len(batch_next), axis=0)
+                full_length_batch_first = np.repeat(centre_line[1:].reshape((1, -1, 1)), len(batch_next), axis=0)
                 cat_connected = np.concatenate(
-                    (full_length_batch_first, batch_next[:, 1:].reshape(len(batch_next), 1, -1)), axis=1)
-                attrs = np.repeat(info_data[centre_line[0]].reshape((1, 1, -1)), len(batch_next), axis=1)
-                # No idea how to handle this : full = np.concatenate((cat_connected,attrs), axis=1)
-                full = [i + [attrs[0][0].tolist()] for i in cat_connected.tolist()]
-                # up
-                batch = batch + full
+                    (full_length_batch_first, batch_next[:, 1:].reshape(len(batch_next), -1, 1)), axis=1)
+                attrs = np.repeat(info_data[centre_line[0]].reshape((1, -1, 1)), len(batch_next), axis=0)
+                full = np.concatenate((cat_connected, attrs), axis=1)
+
+                batch = np.concatenate((batch, full), axis=0)
                 batch_num += 2 * windows_size
                 index += skip_num
             else:
@@ -102,34 +103,32 @@ def batch_generator(data: [pd.DataFrame, pd.DataFrame], batch_size=64, negative_
                 while abs(next_index - start_index) < batch_size - batch_num:
                     next_index = np.random.randint(len(data[0]))
 
-                # this can speed up
-                for i in range(batch_size - batch_num):
-                    batch.append(np.concatenate((
-                        b_data[start_index + i][1:].reshape(-1, 1),
-                        b_data[next_index + i][1:].values.reshape(-1, 1))).tolist()
-                                 +
-                                 [info_data[b_data[start_index + i][0]].tolist()])
-                    # label.append(0)
+                cat_connected = np.concatenate((
+                    b_data[start_index:start_index + batch_size - batch_num][1:].reshape(1, -1, 1),
+                    b_data[next_index:next_index + batch_size - batch_num][1:].reshape(1, -1, 1)), axis=1)
+                attrs = info_data[b_data[start_index:start_index + start_index + batch_size - batch_num][0]].reshape(
+                    (1, -1, 1))
+                full = np.concatenate((cat_connected, attrs), axis=1)
+                batch = np.concatenate((batch, full), axis=0)
                 batch_num += 1
-        yield batch, label
+        batch = batch.reshape((batch_size, 8)).transpose()
+        x = (dict(
+            [('cat_input_{}'.format(i), batch[i]) for i in range(3)] + [('cat_next_input_{}'.format(i), batch[i + 3])
+                                                                        for i in range(3)] +
+            [('attributes_input{}'.format(i), batch[i + 6]) for i in range(2)]
+        ), dict([('output', label)]))
+        yield x
+
+
+def train():
+    batch_size = 64
+    data = load_data()
+    cat_dims = [len(set(data[0][name])) for name in ["seller_id", "cat_id", "brand_id"]]
+    attr_dims = [len(set(data[1][name])) for name in ["age_range", "gender"]]
+    model = build_keras_model(cat_dims, attr_dims)
+    model.fit_generator(batch_generator(data=data, batch_size=batch_size),
+                        steps_per_epoch=int(len(data[0]) / batch_size), epochs=10)
 
 
 if __name__ == '__main__':
-    # build_keras_model([6400, 6400, 6400], [40, 50])
-    # print(load_data()[0].iloc[10 + 4,][["cat_id", "seller_id", "brand_id"]].values.reshape(-1, 1))
-    # print(load_data()[1].loc[189057])
-
-    import time
-
-    data = load_data()
-    k = 0
-    start = time.time()
-    for i in batch_generator(data):
-        k += 1
-        print(i)
-        if k == 1000:
-            break
-    finish = time.time()
-    print((finish - start))
-
-    # pass
+    train()
