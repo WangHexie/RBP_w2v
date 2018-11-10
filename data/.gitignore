@@ -1,6 +1,7 @@
 \.idea/
 .idea/
 transactions.csv
+data/
 *.py[cod]
 *.so
 *.egg
