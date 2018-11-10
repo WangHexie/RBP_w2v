@@ -60,6 +60,8 @@ def batch_generator(data: [pd.DataFrame, pd.DataFrame], batch_size=64, negative_
     index = windows_size
     true_needed = int(batch_size * negative_percent)
     while True:
+        if (index + windows_size + 1) > len(data[0]):  # start from head when reaching the end
+            index = windows_size
         batch = []
         label = []
         batch_num = 0
@@ -77,22 +79,46 @@ def batch_generator(data: [pd.DataFrame, pd.DataFrame], batch_size=64, negative_
                         label.append(0)
                     batch.append(
                         list(np.concatenate((np.array(data_row[3:6]).reshape((-1, 1)),
-                                            np.array(centre_line[["cat_id", "seller_id", "brand_id"]].values).reshape(
-                                                (-1, 1))))) + data[1].iloc[
-                            centre_line["user_id"], ].values.tolist())
+                                             np.array(centre_line[["cat_id", "seller_id", "brand_id"]].values).reshape(
+                                                 (-1, 1))))) + [data[1].iloc[
+                            centre_line["user_id"],].values.tolist()])
                 batch_num += 2 * windows_size
                 index += skip_num
             else:
-                batch_num += 1
-                pass
+                # negative examples is possible to be positive
+                start_index = np.random.randint(len(data[0]))
+                next_index = np.random.randint(len(data[0]))
+                while abs(next_index - start_index) < batch_size - batch_num:
+                    next_index = np.random.randint(len(data[0]))
 
+                # this can speed up
+                for i in range(batch_size - batch_num):
+                    batch.append(np.concatenate((
+                        data[0].iloc[start_index + i,][["cat_id", "seller_id", "brand_id"]].values.reshape(-1, 1),
+                        data[0].iloc[next_index + i,][["cat_id", "seller_id", "brand_id"]].values.reshape(-1,
+                                                                                                          1))).tolist()
+                                 +
+                                 [data[1].loc[data[0].iloc[start_index + i, ]["user_id"]].values.tolist()])
+                    label.append(0)
+                batch_num += 1
         yield batch, label
 
 
 if __name__ == '__main__':
     # build_keras_model([6400, 6400, 6400], [40, 50])
-    # print(load_data())
-    # print(load_data()[1].loc[1][["cat_id", "seller_id", "brand_id"]])
-    for i in batch_generator(load_data()):
+    # print(load_data()[0].iloc[10 + 4,][["cat_id", "seller_id", "brand_id"]].values.reshape(-1, 1))
+    # print(load_data()[1].loc[189057])
+
+    import time
+    data = load_data()
+    k = 0
+    start = time.time()
+    for i in batch_generator(data):
+        k +=1
         print(i)
-        break
+        if k == 100:
+            break
+    finish = time.time()
+    print((finish - start))
+
+    # pass
