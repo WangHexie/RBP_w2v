@@ -54,7 +54,7 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32
             tf.contrib.cluster_resolver.TPUClusterResolver(
                 tpu='grpc://' + '10.0.101.2'
         )
-    )
+    ))
     model.summary()
     return model
 
