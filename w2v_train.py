@@ -52,7 +52,7 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32
         model,
         strategy=tf.contrib.tpu.TPUDistributionStrategy(
             tf.contrib.cluster_resolver.TPUClusterResolver(
-                tpu='grpc://' + os.environ['COLAB_TPU_ADDR'])
+                tpu='grpc://' + '10.0.101.2'
         )
     )
     model.summary()
