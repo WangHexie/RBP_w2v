@@ -92,7 +92,7 @@ def batch_generator(data: [pd.DataFrame, pd.DataFrame], batch_size=64, negative_
     index = windows_size
     true_needed = int(batch_size * negative_percent)
     b_data = data[0][["user_id", "seller_id", "cat_id", "brand_id"]].values
-    info_data = data[1].sort_values(by="user_id").values
+    info_data = data[1].values
     while True:
         batch = np.empty(shape=(0, 8, 1), dtype=np.int32)
         label = np.zeros(shape=batch_size, dtype=np.int8)
