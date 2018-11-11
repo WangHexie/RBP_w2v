@@ -1,7 +1,10 @@
 from tensorflow.keras import layers, Model, optimizers
+from tensorflow.train import AdamOptimizer
+import tensorflow as tf
 import pandas as pd
 import os
 import numpy as np
+import urllib.request
 
 
 def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32, attr_embedding_length=8):
@@ -27,13 +30,13 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32
                              attr_dim in
                              attributes_dims]
 
-    embedded_cat = [layers.Activation("sigmoid")(cat_embeddings[i](cat_inputs[i])) for i in
+    embedded_cat = [layers.Activation("relu")(cat_embeddings[i](cat_inputs[i])) for i in
                     range(len(cat_dims))]
 
-    embedded_cat_next = [layers.Activation("sigmoid")(cat_embeddings[i](cat_next_inputs[i])) for i in
+    embedded_cat_next = [layers.Activation("relu")(cat_embeddings[i](cat_next_inputs[i])) for i in
                          range(len(cat_dims))]
 
-    embedded_attr = [layers.Activation("sigmoid")(attributes_embeddings[i](attributes_inputs[i])) for i in
+    embedded_attr = [layers.Activation("relu")(attributes_embeddings[i](attributes_inputs[i])) for i in
                      range(len(attributes_dims))]
 
     embedded_all = embedded_cat + embedded_cat_next + embedded_attr
@@ -41,16 +44,35 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=32
     flattened_cat = [layers.Flatten(name="flattened_{}".format(i))(embedded_all[i]) for i in range(len(embedded_all))]
 
     concatenate_layer = layers.Concatenate(axis=-1)(flattened_cat)
-    output = layers.Dense(1, activation="sigmoid", name="output")(concatenate_layer)
+    # dense_layer = layers.Dense(70, activation="sigmoid")(concatenate_layer)
+    output = layers.Dense(1, activation="relu", name="output")(concatenate_layer)
     model = Model(inputs=cat_inputs + cat_next_inputs + attributes_inputs, outputs=output)
-    model.compile(optimizer=optimizers.Adam(), loss="mean_squared_error")
+    model.compile(optimizer=AdamOptimizer(), loss="mean_squared_error")
+    model = tf.contrib.tpu.keras_to_tpu_model(
+        model,
+        strategy=tf.contrib.tpu.TPUDistributionStrategy(
+            tf.contrib.cluster_resolver.TPUClusterResolver(
+                tpu='grpc://' + os.environ['COLAB_TPU_ADDR'])
+        )
+    )
     model.summary()
     return model
 
 
 def load_data() -> [pd.DataFrame, pd.DataFrame]:
+    exists = os.path.isfile(os.path.join("data", "data.pkl")) and os.path.isfile(os.path.join("data", "user_info.pkl"))
+    if not exists:
+        print("files don't exist, downloading now..............")
+        dict_url = "https://github.com/WangHexie/RBP_w2v/releases/download/v0.1/id_dict.txt"
+        data_url = "https://github.com/WangHexie/RBP_w2v/releases/download/v0.1/data.pkl"
+        info_url = "https://github.com/WangHexie/RBP_w2v/releases/download/v0.1/user_info.pkl"
+        urllib.request.urlretrieve(dict_url, os.path.join("data", "id_dict.txt"))
+        urllib.request.urlretrieve(data_url, os.path.join("data", "data.pkl"))
+        urllib.request.urlretrieve(info_url, os.path.join("data", "user_info.pkl"))
+
     return [pd.read_pickle(os.path.join("data", "data.pkl"), compression='zip').fillna(0),
             pd.read_pickle(os.path.join("data", "user_info.pkl"), compression='zip')]
+
     # return [pd.read_pickle(os.path.join("data", "data.pkl"), compression='zip').fillna(0),
     #         pd.get_dummies(pd.read_pickle(os.path.join("data", "user_info.pkl"), compression='zip'),
     #                        columns=["age_range", "gender"])]
@@ -79,7 +101,7 @@ def batch_generator(data: [pd.DataFrame, pd.DataFrame], batch_size=64, negative_
         while batch_num < batch_size:
             if (index + windows_size + 1) > len(data[0]):  # start from head when reaching the end
                 index = windows_size
-                
+
             if true_num < true_needed:
                 batch_next = np.concatenate((b_data[index - windows_size:index],
                                              b_data[index + 1:index + 1 + windows_size]))
@@ -125,7 +147,7 @@ def train():
     data = load_data()
     cat_dims = [len(set(data[0][name])) for name in ["seller_id", "cat_id", "brand_id"]]
     attr_dims = [len(set(data[1][name])) for name in ["age_range", "gender"]]
-    model = build_keras_model(cat_dims, attr_dims)
+    model = build_keras_model(cat_dims, attr_dims, embedding_length=64)
     model.fit_generator(batch_generator(data=data, batch_size=batch_size),
                         steps_per_epoch=int(len(data[0]) / batch_size), epochs=10)
 
