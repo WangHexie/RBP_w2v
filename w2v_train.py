@@ -1,4 +1,5 @@
 import os
+import urllib
 
 import keras
 import numpy as np
@@ -53,6 +54,15 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=64
 
 
 def load_data() -> [pd.DataFrame, pd.DataFrame]:
+    exists = os.path.isfile(os.path.join("data", "data.pkl")) and os.path.isfile(os.path.join("data", "user_info.pkl"))
+    if not exists:
+        print("files don't exist, downloading now..............")
+        dict_url = "https://github.com/WangHexie/RBP_w2v/releases/download/v0.1/id_dict.txt"
+        data_url = "https://github.com/WangHexie/RBP_w2v/releases/download/v0.1/data.pkl"
+        info_url = "https://github.com/WangHexie/RBP_w2v/releases/download/v0.1/user_info.pkl"
+        urllib.request.urlretrieve(dict_url, os.path.join("data", "id_dict.txt"))
+        urllib.request.urlretrieve(data_url, os.path.join("data", "data.pkl"))
+        urllib.request.urlretrieve(info_url, os.path.join("data", "user_info.pkl"))
     return [pd.read_pickle(os.path.join("data", "data.pkl"), compression='zip').fillna(0),
             pd.read_pickle(os.path.join("data", "user_info.pkl"), compression='zip')]
     # return [pd.read_pickle(os.path.join("data", "data.pkl"), compression='zip').fillna(0),
