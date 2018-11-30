@@ -1,13 +1,13 @@
 import os
 
+import keras
 import numpy as np
 import pandas as pd
-import keras
+from keras import layers, Model
 from keras.utils import to_categorical
-from tensorflow.keras import layers, Model, optimizers
 
 
-def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=80, attr_embedding_length=8):
+def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=64, attr_embedding_length=32):
     """
 
     :param attr_embedding_length:
@@ -31,13 +31,13 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=80
         layers.Embedding(input_length=1, input_dim=attributes_dims[index], output_dim=attr_embedding_length,
                          name="attr_embedding_{}".format(index)) for index in range(len(attributes_dims))]
 
-    embedded_cat = [layers.Activation("relu")(cat_embeddings[i](cat_inputs[i])) for i in
+    embedded_cat = [layers.Activation("sigmoid")(cat_embeddings[i](cat_inputs[i])) for i in
                     range(len(cat_dims))]
 
-    embedded_cat_next = [layers.Activation("relu")(cat_embeddings[i](cat_next_inputs[i])) for i in
+    embedded_cat_next = [layers.Activation("sigmoid")(cat_embeddings[i](cat_next_inputs[i])) for i in
                          range(len(cat_dims))]
 
-    embedded_attr = [layers.Activation("relu")(attributes_embeddings[i](attributes_inputs[i])) for i in
+    embedded_attr = [layers.Activation("sigmoid")(attributes_embeddings[i](attributes_inputs[i])) for i in
                      range(len(attributes_dims))]
 
     embedded_all = embedded_cat + embedded_cat_next + embedded_attr
@@ -47,7 +47,7 @@ def build_keras_model(cat_dims: list, attributes_dims: list, embedding_length=80
     concatenate_layer = layers.Concatenate(axis=-1)(flattened_cat)
     output = layers.Dense(2, activation="sigmoid", name="output")(concatenate_layer)
     model = Model(inputs=cat_inputs + cat_next_inputs + attributes_inputs, outputs=output)
-    model.compile(optimizer=optimizers.Adam(), loss="categorical_crossentropy", metrics=['mae', 'acc'])
+    model.compile(optimizer="sgd", loss="categorical_crossentropy", metrics=['mae', 'acc'])
     model.summary()
     return model
 
@@ -72,12 +72,17 @@ def batch_generator(data: list, batch_size: int = 64, negative_percent: float = 
     :param windows_size:
     :return:
     """
+    NUM_ID = 3
+    NUM_BUY_ATTR = 3
+    FINAL_LENGTH = NUM_ID * 2 + NUM_BUY_ATTR
+
     index = windows_size
-    true_needed = int(batch_size * negative_percent)
+    true_needed = int(batch_size * (1 - negative_percent))
     b_data = data[0][["user_id", "seller_id", "cat_id", "brand_id"]].values
     info_data = data[1].sort_values(by="user_id").values
+
     while True:
-        batch = np.empty(shape=(0, 8, 1), dtype=np.int32)
+        batch = np.empty(shape=(0, FINAL_LENGTH, 1), dtype=np.int32)  # 9 = 3*id + 3*id + 2*user_attr+ 1*user_id
         label = np.zeros(shape=batch_size, dtype=np.int8)
         batch_num = 0
         true_num = 0
@@ -90,12 +95,18 @@ def batch_generator(data: list, batch_size: int = 64, negative_percent: float = 
                                              b_data[index + 1:index + 1 + windows_size]))
                 centre_line = b_data[index]
                 label_part = (batch_next[:, 0] == centre_line[0]).astype(int)
+                # update true number
+                true_num = true_num + np.sum(label_part)
+
                 label[batch_num:batch_num + windows_size * 2] = label[
                                                                 batch_num:batch_num + windows_size * 2] + label_part
                 full_length_batch_first = np.repeat(centre_line[1:].reshape((1, -1, 1)), len(batch_next), axis=0)
                 cat_connected = np.concatenate(
                     (full_length_batch_first, batch_next[:, 1:].reshape(len(batch_next), -1, 1)), axis=1)
-                attrs = np.repeat(info_data[centre_line[0]].reshape((1, -1, 1)), len(batch_next), axis=0)
+                # add user id
+                attrs = np.repeat(np.append(info_data[centre_line[0]], centre_line[0]).reshape((1, -1, 1)),
+                                  len(batch_next), axis=0)
+
                 full = np.concatenate((cat_connected, attrs), axis=1)
 
                 batch = np.concatenate((batch, full), axis=0)
@@ -103,24 +114,30 @@ def batch_generator(data: list, batch_size: int = 64, negative_percent: float = 
                 index += skip_num
             else:
                 # negative examples is possible to be positive
-                start_index = np.random.randint(len(data[0]))
-                next_index = np.random.randint(len(data[0]))
+                start_index = np.random.randint(len(data[0]) - batch_size + batch_num)
+                next_index = np.random.randint(len(data[0]) - batch_size + batch_num)
                 while abs(next_index - start_index) < batch_size - batch_num:
                     next_index = np.random.randint(len(data[0]))
 
                 cat_connected = np.concatenate((
-                    b_data[start_index:start_index + batch_size - batch_num][1:].reshape(1, -1, 1),
-                    b_data[next_index:next_index + batch_size - batch_num][1:].reshape(1, -1, 1)), axis=1)
-                attrs = info_data[b_data[start_index:start_index + start_index + batch_size - batch_num][0]].reshape(
-                    (1, -1, 1))
+                    b_data[start_index:start_index + batch_size - batch_num][:, 1:].reshape(-1, NUM_ID, 1),
+                    b_data[next_index:next_index + batch_size - batch_num][:, 1:].reshape(-1, NUM_ID, 1)), axis=1)
+                attrs = np.concatenate((info_data[
+                                            b_data[start_index:start_index + batch_size - batch_num][:, 0]],
+                                        b_data[start_index:start_index + batch_size - batch_num][:,
+                                        0].reshape((-1, 1))),
+                                       axis=1).reshape(
+                    (-1, NUM_BUY_ATTR, 1))
                 full = np.concatenate((cat_connected, attrs), axis=1)
                 batch = np.concatenate((batch, full), axis=0)
-                batch_num += 1
-        batch = batch.reshape((batch_size, 8)).transpose()
+                batch_num = batch_num + batch_size - batch_num
+
+        batch = batch.reshape((batch_size, FINAL_LENGTH)).transpose()
         x = (dict(
-            [('cat_input_{}'.format(i), batch[i]) for i in range(3)] + [('cat_next_input_{}'.format(i), batch[i + 3])
-                                                                        for i in range(3)] +
-            [('attributes_input{}'.format(i), batch[i + 6]) for i in range(2)]
+            [('cat_input_{}'.format(i), batch[i]) for i in range(NUM_ID)] + [
+                ('cat_next_input_{}'.format(i), batch[i + NUM_ID])
+                for i in range(NUM_ID)] +
+            [('attributes_input{}'.format(i), batch[i + NUM_ID * 2]) for i in range(NUM_BUY_ATTR)]
         ), dict([('output', to_categorical(label))]))
         yield x
 
@@ -129,10 +146,17 @@ def train():
     batch_size = 128
     data = load_data()
     cat_dims = [len(set(data[0][name])) for name in ["seller_id", "cat_id", "brand_id"]]
-    attr_dims = [len(set(data[1][name])) for name in ["age_range", "gender"]]
+    attr_dims = [len(set(data[1][name])) for name in ["age_range", "gender"]] + [len(set(data[0]["user_id"]))]
     model = build_keras_model(cat_dims, attr_dims)
     model.fit_generator(batch_generator(data=data, batch_size=batch_size, windows_size=4, skip_num=1),
-                        steps_per_epoch=int(len(data[0]) / batch_size), epochs=20)
+                        steps_per_epoch=int(len(data[0]) / batch_size), epochs=10, callbacks=[
+            keras.callbacks.TensorBoard(log_dir='D:\\programming\\w2v_like\\logs', histogram_freq=0, batch_size=32,
+                                        write_graph=True, write_grads=True, write_images=False, embeddings_freq=10,
+                                        embeddings_layer_names=["cat_embedding_{}".format(index) for index in
+                                                                range(len(cat_dims))] + [
+                                                                   "attr_embedding_{}".format(index) for index in
+                                                                   range(len(attr_dims))], embeddings_metadata=None,
+                                        embeddings_data=None)])
     model.save("model.h5")
     return model
 
@@ -145,7 +169,6 @@ def save_embedding(data: [pd.DataFrame, pd.DataFrame], model: Model, num_of_node
     :param num_of_node_type:
     :return:
     """
-    data_values = data[0][["user_id", "seller_id", "cat_id", "brand_id"]].values.T
     full_embedding = []
     for i in range(num_of_node_type):
         embedding = model.get_layer("cat_embedding_{}".format(i)).get_weights()
@@ -155,7 +178,7 @@ def save_embedding(data: [pd.DataFrame, pd.DataFrame], model: Model, num_of_node
 
 
 if __name__ == '__main__':
-    # train()
-    data = load_data()
-    model = keras.models.load_model("model.h5")
-    save_embedding(data, model, 3)
+    train()
+    # data = load_data()
+    # model = keras.models.load_model("model.h5")
+    # save_embedding(data, model, 3)
